@@ -70,7 +70,7 @@ char ** cleancommand(char *rawcommand)
                 {
                     printf("Improperly formatted string argument");
                     fflush(stdout);
-                    free(cleaned);
+                    if(cleaned!=NULL)freecommands(cleaned);
                     return NULL;
                 }
                 char full[(strlen(test)+strlen(testTwo))];
@@ -118,27 +118,8 @@ char ** parsecommands(char *input)
     char **rawcommands=malloc((count+1)*sizeof(char*));//Heap allocate array
     for(count=0;test!=NULL;count++)
     {
-        if(test[0]=='\"')//Handles argument in quotation marks
-        {
-            if(test[strlen(test)-1]=='\"')
-            {
-                char clean[strlen(test)];
-                rawcommands[count]=strdup(clean);
-            }
-            else
-            {
-                char *testTwo=strtok(NULL,"\"");
-                char full[(strlen(test)+strlen(testTwo))];
-                strcat(full," ");//Add back missing space (skipped by strtok)
-                strcat(full,testTwo);//Concatenate the two strings
-                rawcommands[count]=strdup(full);
-            }
-        }
-        else
-        {
-            rawcommands[count]=strdup(test);//If not an arg in quotations, no issue
-        }
-        test=strtok(NULL, " \t");
+        rawcommands[count]=strdup(test);
+        test=strtok(NULL, ";\n");
     }
     rawcommands[count]=NULL;
     return rawcommands;
@@ -148,12 +129,14 @@ void modehandle(char **command,int *mode)
 {
     if(!strcmp(command[1],"sequential")||(!strcmp(command[1],"s")&&strlen(command[1])==1))
     {
+        printf("Mode is sequential");
         *mode=0;
         return;
     }
     else if(!strcmp(command[1],"parallel")||(!strcmp(command[1],"p")&&strlen(command[1])==1))
     {
         *mode=1;
+        printf("Mode is parallel");
         return;
     }
     printf("Invalid mode. Please input parallel or sequential (p or s)\n");
@@ -161,70 +144,89 @@ void modehandle(char **command,int *mode)
     return;
 }
 
-void execute(char **rawcommands,int *mode)
+void executeS(char **rawcommands,int *mode)
 {
     int i=0;
     int pid;
     char **command;
-        if(rawcommands==NULL)return;
-        while(rawcommands[i]!=NULL)
+    if(rawcommands==NULL)return;
+    while(rawcommands[i]!=NULL)
+    {
+        command=cleancommand(rawcommands[i]);
+        while(command==NULL&&rawcommands[i]!=NULL)//Check for null commands
         {
+            free(command);
+            i++;
             command=cleancommand(rawcommands[i]);
-            while(command==NULL&&rawcommands[i]!=NULL)//Check for null commands
-            {
-                i++;
-                command=cleancommand(rawcommands[i]);
-            }
-            if(rawcommands[i]==NULL)//If all commands were null, break loop
-            {
-                freecommands(command);
-                break;
-            }
-            if(!strcmp(command[0],"exit"))
-            {
-                if(rawcommands[i+1]==NULL)
-                {
-                    freecommands(command);
-                    *mode=-1;//Indicates exit
-                    return;
-                }
-                int z=i;
-                free(rawcommands[z]);
-                while(rawcommands[z]!=NULL)
-                {
-                    rawcommands[z]=rawcommands[z+1];
-                    z++;
-                }
-                free(rawcommands[z-1]);
-                freecommands(command);
-                rawcommands[z-1]=strdup(" exit");
-                command=cleancommand(rawcommands[i]);
-            }
-            if(!strcmp(command[0],"mode"))
-            {
-                modehandle(command,mode);
-                i++;
-            }
-
-                pid=fork();
-                if(pid==0)
-                {
-                    if(execv(command[0],command)==-1)
-                        {
-                            printf("\nError executing %s\n",command[0]);
-                            fflush(stdout);
-                            freecommands(command);//Free everything before exiting
-                            free(mode);
-                            exit(1);
-                        }
-                }
-                else if(pid!=0)
-                {
-                    wait(&pid);
-                }
-                freecommands(command);
-                i++;
         }
+        if(rawcommands[i]==NULL)//If all commands were null, break loop
+        {
+            freecommands(command);
+            break;
+        }
+        if(!strcmp(command[0],"exit"))
+        {
+            if(rawcommands[i+1]==NULL)
+            {
+                freecommands(command);
+                *mode=-1;//Indicates exit
+                return;
+            }
+            int z=i;
+            free(rawcommands[z]);
+            while(rawcommands[z]!=NULL)
+            {
+                rawcommands[z]=rawcommands[z+1];
+                z++;
+            }
+            free(rawcommands[z-1]);
+            freecommands(command);
+            rawcommands[z-1]=strdup(" exit");
+            command=cleancommand(rawcommands[i]);
+        }
+        if(!strcmp(command[0],"mode"))
+        {
+            modehandle(command,mode);
+            freecommands(command);
+            if(rawcommands[i+1]==NULL)return;
+            else
+            {
+                i++;
+                command=cleancommand(rawcommands[i]);
+            }
+        }
+        pid=fork();
+        if(pid==0)
+        {
+            if(execv(command[0],command)==-1)
+            {
+                printf("\nError executing %s.\n",command[0]);
+                fflush(stdout);
+                freecommands(command);//Free everything before exiting
+                free(mode);
+                exit(1);
+            }
+        }
+        else if(pid!=0)
+        {
+            wait(&pid);
+        }
+        freecommands(command);
+        i++;
+    }
+    return;
+}
+
+void executeP(char **command)
+{
+    if(execv(command[0],command)==-1)
+    {
+        printf("\nError executing %s.\n",command[0]);
+        fflush(stdout);
+        freecommands(command);
+        exit(1);
+    }
+    fflush(stdout);
     return;
 }
 
@@ -239,13 +241,54 @@ int main(int argc, char **argv)
     while (fgets(buffer, 1024, stdin) != NULL)
     {
             testArray=parsecommands(buffer);
-            execute(testArray,mode);
-            freecommands(testArray);
-            if(*mode==-1)
+            if(*mode==0)
             {
-                free(mode);
-                return 0;
+                executeS(testArray,mode);
+                freecommands(testArray);
+                if(*mode==-1)break;
             }
+            else if(*mode==1)
+            {
+                char **com;
+                int num=0;
+                while(testArray[num]!=NULL)num++;
+                int pids[num];
+                for(int z=0;testArray[z]!=NULL;z++)
+                {
+                    com=cleancommand(testArray[z]);
+                    if(com!=NULL)
+                    {
+                        if(!strcmp(com[0],"mode"))
+                        {
+                            modehandle(com,mode);
+                            freecommands(com);
+                        }
+                        else if(!strcmp(com[0],"exit"))
+                        {
+                            *mode=-1;
+                            freecommands(com);
+                        }
+                        else
+                        {
+                            pids[z]=fork();
+                            if(pids[z]==0)executeP(com);
+                            freecommands(com);
+                        }
+                    }
+                }
+                for(int j=0;j<num;j++)
+                {
+                    
+                    wait(&pids[j]);
+                }
+                freecommands(testArray);
+                if(*mode==-1)
+                {
+                    free(mode);
+                    return 0;
+                }
+            }
+            fflush(stdout);
             printf("\nprompt>");
             fflush(stdout);
     }
